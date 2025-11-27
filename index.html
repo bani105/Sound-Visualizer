@@ -4,10 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
 <title>TBFL_6 — Web Audio Visualizer</title>
+
 <!-- Three.js CDN -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/renderers/CSS2DRenderer.js"></script>
+
 <style>
   html,body { height:100%; margin:0; background:#000; color:#00FF00; font-family: monospace; }
   #ui {
@@ -22,366 +24,363 @@
   .coord-label { font-size:10px; color:#00FF00; text-shadow: 0 0 4px rgba(0,255,0,0.4); }
 </style>
 </head>
+
 <body>
-  <div id="ui">
-    <div id="title">TBFL_6 — Web Visualizer</div>
-    <button id="btn-mic">Mikrofon (Live)</button>
-    <label for="wavfile">WAV laden</label>
-    <input id="wavfile" type="file" accept=".wav,audio/wav" />
-    <button id="btn-stop">Stop</button>
-    <div id="hint">Allow mic for live input. On iOS need HTTPS or localhost.</div>
-  </div>
 
-  <script>
-  // ===============================
-  // Setup Three.js Scene
-  // ===============================
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
+<!-- UI -->
+<div id="ui">
+  <div id="title">TBFL_6 — Web Visualizer</div>
+  <button id="btn-mic">Mikrofon (Live)</button>
+  <label for="wavfile">WAV laden</label>
+  <input id="wavfile" type="file" accept=".wav,audio/wav" />
+  <button id="btn-stop">Stop</button>
+  <div id="hint">Auf iOS/Safari muss Audio per Touch gestartet werden. HTTPS erforderlich.</div>
+</div>
 
-  const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 10000);
-  camera.position.set(0, 300, 800);
 
-  const renderer = new THREE.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setSize(innerWidth, innerHeight);
-  document.body.appendChild(renderer.domElement);
+<script>
+// ============================================================================
+// iOS / SAFARI AUDIO FIX — MUSS GANZ OBEN STEHEN
+// ============================================================================
+let audioCtx = null;
 
-  // CSS2DRenderer for small labels
-  const labelRenderer = new THREE.CSS2DRenderer();
-  labelRenderer.setSize(innerWidth, innerHeight);
-  labelRenderer.domElement.style.position = 'absolute';
-  labelRenderer.domElement.style.top = '0px';
-  labelRenderer.domElement.style.pointerEvents = 'none';
-  document.body.appendChild(labelRenderer.domElement);
+document.addEventListener("touchstart", () => {
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+}, { once: true });
 
-  // Controls (for debug / interaction)
-  const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
-  controls.enablePan = false; controls.enableZoom = false; // keep retro rotation controlled by script
-  controls.enabled = false;
 
-  // Lights — subtle green tint
-  const ambient = new THREE.AmbientLight(0x00ff00, 0.08);
-  scene.add(ambient);
+// ============================================================================
+// THREE.JS SETUP
+// ============================================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
 
-  // Retro grid — faint
-  const gridHelper = new THREE.GridHelper(2000, 40, 0x003300, 0x003300);
-  gridHelper.material.opacity = 0.06; gridHelper.material.transparent = true;
-  gridHelper.position.y = 0;
-  scene.add(gridHelper);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 10000);
+camera.position.set(0, 300, 800);
 
-  // ===============================
-  // Audio Setup
-  // ===============================
-  let audioCtx = null;
-  let analyser = null;
-  let sourceNode = null;
-  let dataArray = null;
-  let freqBinCount = 0;
-  let running = false;
-  const FFT_SIZE = 2048; // tradeoff between resolution and CPU
-  const DURATION = 0.1; // not used directly here; we sample per RAF
-  const NOISE_THRESHOLD = 0.0015; // RMS threshold
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
 
-  // storage for recent points (same semantics as your deque)
-  const maxPoints = 40; // adjustable for performance on mobile
-  const freqs = []; const louds = []; const cents = [];
+const labelRenderer = new THREE.CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.style.position = "absolute";
+labelRenderer.domElement.style.top = "0px";
+labelRenderer.domElement.style.pointerEvents = "none";
+document.body.appendChild(labelRenderer.domElement);
 
-  // ===============================
-  // Geometry & Materials (preallocated)
-  // ===============================
-  const maxCapacity = maxPoints;
-  const positions = new Float32Array(maxCapacity * 3);
-  const colors = new Float32Array(maxCapacity * 3);
-  const sizes = new Float32Array(maxCapacity);
+const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
+controls.enabled = false;
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1).setUsage(THREE.DynamicDrawUsage));
+const ambient = new THREE.AmbientLight(0x00ff00, 0.08);
+scene.add(ambient);
 
-  const material = new THREE.ShaderMaterial({
-    vertexColors: true,
-    transparent: true,
-    depthTest: true,
-    uniforms: {
-      pointScale: { value: window.innerHeight / 2.0 }
-    },
-    vertexShader: `
+const gridHelper = new THREE.GridHelper(2000, 40, 0x003300, 0x003300);
+gridHelper.material.opacity = 0.06;
+gridHelper.material.transparent = true;
+scene.add(gridHelper);
+
+
+// ============================================================================
+// AUDIO VARIABLES
+// ============================================================================
+let analyser = null;
+let sourceNode = null;
+let dataArray = null;
+let freqBinCount = 0;
+let running = false;
+
+const FFT_SIZE = 2048;
+const NOISE_THRESHOLD = 0.0015;
+
+const maxPoints = 40;
+const freqs = [];
+const louds = [];
+const cents = [];
+
+
+// ============================================================================
+// GEOMETRY (POINT CLOUD + LINES)
+// ============================================================================
+const maxCapacity = maxPoints;
+const positions = new Float32Array(maxCapacity * 3);
+const colors = new Float32Array(maxCapacity * 3);
+const sizes = new Float32Array(maxCapacity);
+
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1).setUsage(THREE.DynamicDrawUsage));
+
+const material = new THREE.ShaderMaterial({
+  vertexColors: true,
+  transparent: true,
+  depthTest: true,
+  uniforms: { pointScale: { value: window.innerHeight / 2 } },
+  vertexShader: `
       attribute float size;
       varying vec3 vColor;
-      void main() {
+      void main(){
         vColor = color;
-        vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+        vec4 mvPosition = modelViewMatrix * vec4(position,1.0);
         gl_Position = projectionMatrix * mvPosition;
-        // size attenuation by distance
         gl_PointSize = size * (300.0 / -mvPosition.z);
       }
     `,
-    fragmentShader: `
+  fragmentShader: `
       varying vec3 vColor;
-      void main() {
-        // square point (not circular)
-        gl_FragColor = vec4(vColor, 1.0);
+      void main(){
+        gl_FragColor = vec4(vColor,1.0);
       }
     `
-  });
+});
 
-  const points = new THREE.Points(geometry, material);
-  scene.add(points);
+const points = new THREE.Points(geometry, material);
+scene.add(points);
 
-  // Lines as a single LineSegments object (preallocated)
-  const linePositions = new Float32Array((maxCapacity - 1) * 2 * 3); // (segments)*(2 points)*(xyz)
-  const lineGeom = new THREE.BufferGeometry();
-  lineGeom.setAttribute('position', new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage));
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, linewidth: 1, opacity: 0.9 });
-  const lines = new THREE.LineSegments(lineGeom, lineMat);
-  scene.add(lines);
+const linePositions = new Float32Array((maxCapacity - 1) * 2 * 3);
+const lineGeom = new THREE.BufferGeometry();
+lineGeom.setAttribute("position", new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage));
+const lineMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.9 });
+const lines = new THREE.LineSegments(lineGeom, lineMat);
+scene.add(lines);
 
-  // Label cache (CSS2D) — create only when needed and only for every Nth point
-  const labelObjects = [];
-  const LABEL_EVERY = 5; // only label every 5th point to save performance on iOS
 
-  // Helper: map frequency -> x (log scale)
-  const FMIN = 20;
-  const FMAX = 22050;
-  function freqToX(f) {
-    const logMin = Math.log10(FMIN);
-    const logMax = Math.log10(FMAX);
-    const v = Math.log10(Math.max(f, FMIN));
-    const t = (v - logMin) / (logMax - logMin); // 0..1
-    const span = 1400; // visual width
-    return (t - 0.5) * span; // center at 0
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+const FMIN = 20, FMAX = 22050;
+
+function freqToX(f){
+  const t = (Math.log10(Math.max(f,FMIN)) - Math.log10(FMIN)) / (Math.log10(FMAX) - Math.log10(FMIN));
+  return (t - 0.5) * 1400;
+}
+function centroidToY(c){ return (c/2000)*800; }
+function loudToZ(l){ return Math.min(Math.max(l*5,0.001),1.5); }
+
+function computeRMS(arr){
+  let s=0;
+  for(let i=0;i<arr.length;i++) s+=arr[i]*arr[i];
+  return Math.sqrt(s/arr.length);
+}
+
+function computeCentroid(mags, freq){
+  let num=0, den=0;
+  for(let i=0;i<mags.length;i++){
+    num += mags[i]*freq[i];
+    den += mags[i];
   }
+  return den>0 ? num/den : 0;
+}
 
-  // map centroid (y) and loudness (z)
-  function centroidToY(c) { return (c/2000.0)*800; } // scale guess, will autoscale later
-  function loudToZ(l) { return Math.min(Math.max(l*5.0, 0.001), 1.5); } // loudness scaled
 
-  // Compute RMS on time domain
-  function computeRMS(timeData) {
-    let sum = 0.0;
-    for (let i=0;i<timeData.length;i++){ const v = timeData[i]; sum += v*v; }
-    return Math.sqrt(sum / timeData.length);
-  }
+// ============================================================================
+// AUDIO START (MIC)
+// ============================================================================
+async function startMic() {
+  if (running) return;
 
-  // Compute centroid from freqMagnitudes (linear mags) and bin freq centers
-  function computeCentroid(mags, binFreqs) {
-    let num = 0.0, den = 0.0;
-    for (let i=0;i<mags.length;i++){
-      const m = mags[i];
-      num += binFreqs[i]*m;
-      den += m;
-    }
-    return den>0 ? num/den : 0;
-  }
+  // AudioContext muss durch Klick aktiv sein
+  if (!audioCtx)
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-  // ===============================
-  // Audio chain creation helpers
-  // ===============================
-  async function startMic() {
-    if (running) return;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (audioCtx.state === "suspended")
+      await audioCtx.resume();
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+
     sourceNode = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = FFT_SIZE;
     analyser.smoothingTimeConstant = 0.65;
+
     freqBinCount = analyser.frequencyBinCount;
     dataArray = new Float32Array(freqBinCount);
 
     sourceNode.connect(analyser);
     running = true;
+
+  } catch (err) {
+    alert("Mikrofon konnte nicht gestartet werden:\n" + err.message);
   }
+}
 
-  async function startWav(file) {
-    if (running) stopAll();
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = await audioCtx.decodeAudioData(arrayBuffer);
-    const bufferSource = audioCtx.createBufferSource();
-    bufferSource.buffer = buffer;
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = FFT_SIZE;
-    analyser.smoothingTimeConstant = 0.65;
-    freqBinCount = analyser.frequencyBinCount;
-    dataArray = new Float32Array(freqBinCount);
 
-    bufferSource.connect(analyser);
-    analyser.connect(audioCtx.destination);
-    bufferSource.start();
-    sourceNode = bufferSource;
-    running = true;
-    // stop when finished
-    bufferSource.onended = () => { running = false; };
-  }
+// ============================================================================
+// AUDIO: WAV FILE
+// ============================================================================
+async function startWav(file){
+  if (running) stopAll();
 
-  function stopAll() {
-    running = false;
-    try { if (sourceNode && sourceNode.stop) sourceNode.stop(); } catch(e){}
-    try { if (audioCtx && audioCtx.close) audioCtx.close(); } catch(e){}
-    sourceNode = null; analyser = null; audioCtx = null;
-  }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = await file.arrayBuffer();
+  const decoded = await audioCtx.decodeAudioData(buf);
 
-  // ===============================
-  // UI hooks
-  // ===============================
-  document.getElementById('btn-mic').addEventListener('click', async () => {
-    try {
-      await startMic();
-    } catch (err) {
-      alert("Fehler beim Zugriff auf Mikrofon:\n" + err.message);
-    }
-  });
+  const bs = audioCtx.createBufferSource();
+  bs.buffer = decoded;
 
-  document.getElementById('wavfile').addEventListener('change', (ev) => {
-    const f = ev.target.files[0];
-    if (f) startWav(f);
-  });
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = FFT_SIZE;
+  analyser.smoothingTimeConstant = 0.65;
 
-  document.getElementById('btn-stop').addEventListener('click', () => {
-    stopAll();
-  });
+  freqBinCount = analyser.frequencyBinCount;
+  dataArray = new Float32Array(freqBinCount);
 
-  // ===============================
-  // Animation / Update loop
-  // ===============================
-  let rot = 0;
-  let lastTime = performance.now();
+  bs.connect(analyser);
+  analyser.connect(audioCtx.destination);
 
-  function animate(now) {
-    requestAnimationFrame(animate);
-    const dt = (now - lastTime) / 1000.0;
-    lastTime = now;
+  bs.start();
+  running = true;
 
-    rot += 0.3 * (dt*60); // keep rotation speed roughly independent of dt
-    camera.position.x = Math.sin(rot * 0.01) * 800;
-    camera.position.z = Math.cos(rot * 0.01) * 800;
-    camera.lookAt(0,200,0);
+  bs.onended = () => running = false;
+}
 
-    if (running && analyser) {
-      // get time domain for RMS
-      const timeData = new Float32Array(analyser.fftSize);
-      analyser.getFloatTimeDomainData(timeData);
-      const rms = computeRMS(timeData);
 
-      // get frequency data in dB, convert to linear magnitude
-      const freqDb = new Float32Array(freqBinCount);
-      analyser.getFloatFrequencyData(freqDb);
-      const mags = new Float32Array(freqBinCount);
-      const binFreqs = new Float32Array(freqBinCount);
-      const nyquist = audioCtx.sampleRate / 2;
-      for (let i=0;i<freqBinCount;i++){
-        mags[i] = Math.pow(10, freqDb[i] / 20.0); // dB -> linear
-        binFreqs[i] = (i / freqBinCount) * nyquist;
-      }
+// ============================================================================
+// STOP AUDIO
+// ============================================================================
+function stopAll(){
+  running = false;
+  try{ if(sourceNode && sourceNode.stop) sourceNode.stop(); }catch(e){}
+  try{ if(audioCtx) audioCtx.close(); }catch(e){}
+  analyser = sourceNode = audioCtx = null;
+}
 
-      // find dominant freq (peak)
-      let maxIdx = 0;
-      let maxVal = -Infinity;
-      for (let i=1;i<mags.length;i++){ if (mags[i] > maxVal){ maxVal = mags[i]; maxIdx = i; } }
-      const dominantFreq = binFreqs[maxIdx] || 0;
-      const centroid = computeCentroid(mags, binFreqs) || 0;
 
-      if (rms >= NOISE_THRESHOLD) {
-        // push into circular structure
-        if (freqs.length >= maxPoints) { freqs.shift(); louds.shift(); cents.shift(); }
-        freqs.push(dominantFreq);
-        louds.push(rms);
-        cents.push(centroid);
-      }
-    }
+// ============================================================================
+// UI EVENTS
+// ============================================================================
+document.getElementById("btn-mic").onclick = startMic;
+document.getElementById("btn-stop").onclick = stopAll;
 
-    // Update geometry from arrays
-    const n = freqs.length;
-    // set defaults to invisible for unused entries
-    for (let i=0;i<maxCapacity;i++){
-      const pi = i*3;
-      if (i < n) {
-        const f = Math.max(freqs[i], 20);
-        const x = freqToX(f);
-        const y = centroidToY(cents[i] || 0);
-        const z = loudToZ(louds[i] || 0);
-        positions[pi] = x; positions[pi+1] = y; positions[pi+2] = z;
+document.getElementById("wavfile").addEventListener("change", e => {
+  if (e.target.files[0]) startWav(e.target.files[0]);
+});
 
-        // Age-based color: newer points brighter (green)
-        const age = i / Math.max(1, n-1); // 0..1
-        const g = age * 1.0;
-        const r = age * 0.2;
-        colors[pi] = r; colors[pi+1] = g; colors[pi+2] = 0.0;
 
-        sizes[i] = 8.0;
-      } else {
-        positions[pi] = 1e6; positions[pi+1] = 1e6; positions[pi+2] = 1e6;
-        colors[pi]=0; colors[pi+1]=0; colors[pi+2]=0;
-        sizes[i] = 0.0;
-      }
-    }
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
-    geometry.attributes.size.needsUpdate = true;
+// ============================================================================
+// ANIMATION LOOP
+// ============================================================================
+let rot = 0;
+let lastTime = performance.now();
 
-    // Update lines
-    // we write segments for i->i+1
-    let lp = 0;
-    for (let i=0;i<n-1;i++){
-      const iA = i*3, iB=(i+1)*3;
-      linePositions[lp++] = positions[iA];   linePositions[lp++] = positions[iA+1];   linePositions[lp++] = positions[iA+2];
-      linePositions[lp++] = positions[iB];   linePositions[lp++] = positions[iB+1];   linePositions[lp++] = positions[iB+2];
-    }
-    // clear rest
-    for (; lp < linePositions.length; lp++) linePositions[lp] = 1e6;
-    lineGeom.attributes.position.needsUpdate = true;
-
-    // Update labels (only every LABEL_EVERY)
-    // Reuse DOM elements
-    let li = 0;
-    for (let i=0;i<n;i++){
-      if (i % LABEL_EVERY !== 0) continue;
-      const idx = i / LABEL_EVERY | 0;
-      const x = positions[i*3], y = positions[i*3+1], z = positions[i*3+2];
-      const txt = `(${Math.round(freqs[i])},${Math.round(cents[i]||0)},${(louds[i]||0).toFixed(2)})`;
-      if (!labelObjects[idx]) {
-        const div = document.createElement('div');
-        div.className = 'coord-label';
-        div.textContent = txt;
-        const label = new THREE.CSS2DObject(div);
-        label.position.set(x, y, z);
-        scene.add(label);
-        labelObjects[idx] = label;
-      } else {
-        const label = labelObjects[idx];
-        label.element.textContent = txt;
-        label.position.set(x, y, z);
-      }
-      li++;
-    }
-    // hide unused labels
-    for (let j=li;j<labelObjects.length;j++){
-      if (labelObjects[j] && labelObjects[j].element) labelObjects[j].element.style.display = 'none';
-    }
-    for (let k=0;k<li;k++){ if (labelObjects[k] && labelObjects[k].element) labelObjects[k].element.style.display = 'block'; }
-
-    renderer.render(scene, camera);
-    labelRenderer.render(scene, camera);
-  }
-
+function animate(t){
   requestAnimationFrame(animate);
 
-  // ===============================
-  // Resize handling
-  // ===============================
-  window.addEventListener('resize', () => {
-    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-    labelRenderer.setSize(innerWidth, innerHeight);
-  });
+  const dt = (t - lastTime)/1000;
+  lastTime = t;
 
-  // ===============================
-  // Helpful note for iOS users
-  // ===============================
-  console.log("TBFL_6 Web Visualizer ready. Use 'Mikrofon' or load a WAV file.");
+  rot += 0.3 * dt * 60;
+  camera.position.x = Math.sin(rot*0.01)*800;
+  camera.position.z = Math.cos(rot*0.01)*800;
+  camera.lookAt(0,200,0);
 
-  </script>
+  if(running && analyser){
+    const timeData = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(timeData);
+    const rms = computeRMS(timeData);
+
+    const freqDb = new Float32Array(freqBinCount);
+    analyser.getFloatFrequencyData(freqDb);
+
+    const mags = new Float32Array(freqBinCount);
+    const binFreqs = new Float32Array(freqBinCount);
+
+    const nyquist = audioCtx.sampleRate/2;
+    for(let i=0;i<freqBinCount;i++){
+      mags[i] = Math.pow(10, freqDb[i]/20);
+      binFreqs[i] = (i/freqBinCount)*nyquist;
+    }
+
+    let maxIdx = 0;
+    let maxVal = -Infinity;
+    for(let i=0;i<mags.length;i++){
+      if(mags[i] > maxVal){ maxVal=mags[i]; maxIdx=i; }
+    }
+
+    const peak = binFreqs[maxIdx] || 0;
+    const centroid = computeCentroid(mags, binFreqs);
+
+    if(rms >= NOISE_THRESHOLD){
+      if(freqs.length >= maxPoints){ freqs.shift(); louds.shift(); cents.shift(); }
+      freqs.push(peak);
+      louds.push(rms);
+      cents.push(centroid);
+    }
+  }
+
+  const n = freqs.length;
+
+  for(let i=0;i<maxCapacity;i++){
+    const p = i*3;
+
+    if(i < n){
+      const x = freqToX(freqs[i]);
+      const y = centroidToY(cents[i]);
+      const z = loudToZ(louds[i]);
+
+      positions[p]=x; positions[p+1]=y; positions[p+2]=z;
+
+      const age = i / Math.max(1,n-1);
+      colors[p] = age*0.2;
+      colors[p+1] = age;
+      colors[p+2] = 0;
+
+      sizes[i] = 8;
+
+    } else {
+      positions[p]=positions[p+1]=positions[p+2]=1e6;
+      sizes[i]=0;
+    }
+  }
+
+  geometry.attributes.position.needsUpdate = true;
+  geometry.attributes.color.needsUpdate = true;
+  geometry.attributes.size.needsUpdate = true;
+
+  let lp=0;
+  for(let i=0;i<n-1;i++){
+    const A=i*3, B=(i+1)*3;
+    linePositions[lp++] = positions[A];
+    linePositions[lp++] = positions[A+1];
+    linePositions[lp++] = positions[A+2];
+    linePositions[lp++] = positions[B];
+    linePositions[lp++] = positions[B+1];
+    linePositions[lp++] = positions[B+2];
+  }
+  for(;lp<linePositions.length;lp++) linePositions[lp]=1e6;
+  lineGeom.attributes.position.needsUpdate = true;
+
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+requestAnimationFrame(animate);
+
+
+// ============================================================================
+// RESIZE
+// ============================================================================
+window.addEventListener("resize", ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  labelRenderer.setSize(innerWidth, innerHeight);
+});
+
+console.log("TBFL_6 Web Visualizer ready.");
+
+</script>
+
 </body>
 </html>
