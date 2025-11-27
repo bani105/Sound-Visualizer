@@ -5,151 +5,231 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
 <title>TBFL_6 — Web Audio Visualizer</title>
 
-<!-- Three.js r128 - funktioniert garantiert -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <style>
-  html,body { height:100%; margin:0; background:#000; color:#00FF00; font-family: monospace; overflow:hidden; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { 
+    height:100%; 
+    background:#000000; 
+    color:#00FF00; 
+    font-family: 'Courier New', monospace; 
+    overflow:hidden; 
+  }
+  
   #ui {
-    position: absolute; left:12px; top:12px; z-index: 10;
-    background: rgba(0,0,0,0.7); border:1px solid #00ff00; padding:12px; border-radius:6px;
-    box-shadow: 0 0 20px rgba(0,255,0,0.3);
+    position: absolute; 
+    left:20px; 
+    top:20px; 
+    z-index: 10;
+    background: rgba(0,0,0,0.8); 
+    border:2px solid #00FF00; 
+    padding:15px; 
+    border-radius:0px;
+    min-width:280px;
   }
-  button, label { 
-    color:#00FF00; background:#001100; border:1px solid #00ff00; 
-    padding:8px 12px; margin:4px; border-radius:4px; cursor:pointer; 
-    font-family: monospace; font-size:12px;
-    transition: all 0.2s;
+  
+  #title { 
+    font-weight:bold; 
+    font-size:16px; 
+    color:#00FF00; 
+    margin-bottom:12px;
+    letter-spacing: 2px;
   }
-  button:hover, label:hover { background:#003300; box-shadow: 0 0 10px rgba(0,255,0,0.5); }
-  button:active, label:active { transform: scale(0.95); }
+  
+  .section {
+    margin-bottom:10px;
+    padding:8px 0;
+    border-top:1px solid #003300;
+  }
+  
+  .section:first-of-type {
+    border-top:none;
+  }
+  
+  .label {
+    font-size:11px;
+    color:#00FF00;
+    margin-bottom:6px;
+    opacity:0.8;
+  }
+  
+  button, label.file-label { 
+    color:#00FF00; 
+    background:#000000; 
+    border:1px solid #00FF00; 
+    padding:8px 12px; 
+    margin:2px 0;
+    cursor:pointer; 
+    font-family: 'Courier New', monospace; 
+    font-size:11px;
+    width:100%;
+    text-align:left;
+    transition: all 0.1s;
+  }
+  
+  button:hover, label.file-label:hover { 
+    background:#003300;
+    box-shadow: 0 0 8px rgba(0,255,0,0.4);
+  }
+  
+  button:active, label.file-label:active { 
+    background:#001100;
+  }
+  
   input[type=file] { display:none; }
-  #title { font-weight:bold; font-size:16px; color:#00FF00; display:block; margin-bottom:8px; }
+  
   #status { 
-    font-size:11px; color:#88ff88; margin-top:8px; padding:6px; 
-    background:rgba(0,50,0,0.3); border-radius:4px; min-height:20px;
+    font-size:10px; 
+    color:#00FF00; 
+    margin-top:12px; 
+    padding:8px; 
+    background:rgba(0,50,0,0.3); 
+    border:1px solid #003300;
+    min-height:40px;
+    line-height:1.4;
   }
-  .error { color:#ff0000 !important; }
-  .success { color:#00ff00 !important; }
+  
+  .error { color:#FF0000 !important; background:rgba(50,0,0,0.3) !important; }
+  .success { color:#00FF00 !important; }
+  
   canvas { display:block; }
+  
+  #coords {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    background: rgba(0,0,0,0.8);
+    border: 1px solid #00FF00;
+    padding: 10px;
+    font-size: 9px;
+    color: #00FF00;
+    font-family: 'Courier New', monospace;
+    max-height: 200px;
+    overflow-y: auto;
+    min-width: 200px;
+  }
+  
+  .coord-line {
+    margin: 2px 0;
+    opacity: 0.8;
+  }
 </style>
 </head>
 
 <body>
 
-<!-- UI -->
 <div id="ui">
-  <div id="title">🎵 TBFL_6 — Audio Visualizer</div>
-  <button id="btn-mic">🎤 Mikrofon starten</button>
-  <label for="wavfile">📁 WAV laden</label>
-  <input id="wavfile" type="file" accept=".wav,.mp3,audio/*" />
-  <button id="btn-stop">⏹ Stop</button>
-  <div id="status">Bereit. Klicke auf Mikrofon oder lade eine Datei.</div>
+  <div id="title">TBFL_6</div>
+  
+  <div class="section">
+    <div class="label">🔊 Eingabequelle wählen:</div>
+    <button id="btn-mic">🎤 [1] Mikrofon (Live)</button>
+    <label for="wavfile" class="file-label">🎵 [2] WAV-Datei analysieren</label>
+    <input id="wavfile" type="file" accept=".wav,.mp3,audio/*" />
+  </div>
+  
+  <div class="section">
+    <button id="btn-stop">⏹ Stop</button>
+  </div>
+  
+  <div id="status">Bereit. Bitte Eingabequelle wählen.</div>
 </div>
 
+<div id="coords"></div>
 
 <script>
 console.log("🎵 TBFL_6 Visualizer wird initialisiert...");
 
-// ============================================================================
-// iOS / SAFARI AUDIO FIX
-// ============================================================================
-let audioCtx = null;
+// ================================
+// PARAMETER (wie Python-Script)
+// ================================
+const DURATION = 0.1;
+const NOISE_THRESHOLD = 0.01;
+const MAX_POINTS = Math.floor(2 / DURATION);
+const FFT_SIZE = 2048;
 
+let audioCtx = null;
+let analyser = null;
+let sourceNode = null;
+let running = false;
+let audioSource = null;
+
+const frequencies = [];
+const loudness = [];
+const centroids = [];
+
+// iOS Audio Fix
 document.addEventListener("touchstart", () => {
   if (audioCtx && audioCtx.state === "suspended") {
-    console.log("AudioContext wird aktiviert (iOS Touch)");
     audioCtx.resume();
   }
 }, { once: true });
 
-
-// ============================================================================
-// THREE.JS SETUP
-// ============================================================================
+// ================================
+// THREE.JS SETUP - EXAKT WIE PYTHON
+// ================================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
-scene.fog = new THREE.Fog(0x000000, 500, 2000);
 
 const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 10000);
-camera.position.set(0, 300, 800);
+camera.position.set(0, 800, 1500);
 
-const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({antialias:false, alpha:false});
+renderer.setPixelRatio(1);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// Beleuchtung
-const ambient = new THREE.AmbientLight(0x00ff00, 0.1);
-scene.add(ambient);
-
-const pointLight = new THREE.PointLight(0x00ff00, 0.5, 1500);
-pointLight.position.set(0, 400, 0);
-scene.add(pointLight);
-
-// Grid
-const gridHelper = new THREE.GridHelper(2000, 40, 0x00ff00, 0x003300);
-gridHelper.material.opacity = 0.1;
+// Grid wie Python (blasses Weiß, sehr transparent)
+const gridSize = 4000;
+const gridDivisions = 40;
+const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xFFFFFF, 0xFFFFFF);
+gridHelper.material.opacity = 0.05;
 gridHelper.material.transparent = true;
+gridHelper.material.depthWrite = false;
 scene.add(gridHelper);
 
+// Achsen unsichtbar machen
+scene.add(new THREE.AxesHelper(0));
 
-// ============================================================================
-// AUDIO VARIABLES
-// ============================================================================
-let analyser = null;
-let sourceNode = null;
-let dataArray = null;
-let freqBinCount = 0;
-let running = false;
-let audioSource = null; // Track für cleanup
-
-const FFT_SIZE = 2048;
-const NOISE_THRESHOLD = 0.002;
-
-const maxPoints = 50;
-const freqs = [];
-const louds = [];
-const cents = [];
-
-
-// ============================================================================
-// GEOMETRY (POINT CLOUD + LINES)
-// ============================================================================
-const maxCapacity = maxPoints;
+// ================================
+// GEOMETRIE - Quadratische Marker wie Python
+// ================================
+const maxCapacity = MAX_POINTS;
 const positions = new Float32Array(maxCapacity * 3);
-const colors = new Float32Array(maxCapacity * 3);
+const colors = new Float32Array(maxCapacity * 4);
 const sizes = new Float32Array(maxCapacity);
 
 const geometry = new THREE.BufferGeometry();
 geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+geometry.setAttribute("color", new THREE.BufferAttribute(colors, 4));
 geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
 
+// Quadratisches Punkt-Material (wie Python marker="s")
 const material = new THREE.ShaderMaterial({
   vertexColors: true,
   transparent: true,
   depthTest: true,
-  uniforms: { pointScale: { value: window.innerHeight / 2 } },
   vertexShader: `
-      attribute float size;
-      varying vec3 vColor;
-      void main(){
-        vColor = color;
-        vec4 mvPosition = modelViewMatrix * vec4(position,1.0);
-        gl_Position = projectionMatrix * mvPosition;
-        gl_PointSize = size * (300.0 / -mvPosition.z);
-      }
-    `,
+    attribute float size;
+    attribute vec4 color;
+    varying vec4 vColor;
+    void main(){
+      vColor = color;
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mvPosition;
+      gl_PointSize = size * (300.0 / -mvPosition.z);
+    }
+  `,
   fragmentShader: `
-      varying vec3 vColor;
-      void main(){
-        float dist = length(gl_PointCoord - vec2(0.5));
-        if(dist > 0.5) discard;
-        float alpha = 1.0 - (dist * 2.0);
-        gl_FragColor = vec4(vColor, alpha);
-      }
-    `
+    varying vec4 vColor;
+    void main(){
+      // Quadratische Form
+      vec2 coord = gl_PointCoord - vec2(0.5);
+      if(abs(coord.x) > 0.45 || abs(coord.y) > 0.45) discard;
+      gl_FragColor = vColor;
+    }
+  `
 });
 
 const points = new THREE.Points(geometry, material);
@@ -157,40 +237,30 @@ scene.add(points);
 
 // Linien zwischen Punkten
 const linePositions = new Float32Array((maxCapacity - 1) * 2 * 3);
+const lineColors = new Float32Array((maxCapacity - 1) * 2 * 4);
 const lineGeom = new THREE.BufferGeometry();
 lineGeom.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
-const lineMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.6 });
+lineGeom.setAttribute("color", new THREE.BufferAttribute(lineColors, 4));
+
+const lineMat = new THREE.LineBasicMaterial({ 
+  vertexColors: true, 
+  transparent: true,
+  linewidth: 1
+});
 const lines = new THREE.LineSegments(lineGeom, lineMat);
 scene.add(lines);
 
+// ================================
+// SMOOTH AXIS SCALING (wie Python)
+// ================================
+let x_min = 0, x_max = 1000;
+let y_min = 0, y_max = 2000;
+let z_min = 0, z_max = 1;
+const SMOOTH_FACTOR = 0.3;
 
-// ============================================================================
+// ================================
 // HELPER FUNCTIONS
-// ============================================================================
-const FMIN = 20, FMAX = 22050;
-
-function freqToX(f){
-  const t = (Math.log10(Math.max(f,FMIN)) - Math.log10(FMIN)) / (Math.log10(FMAX) - Math.log10(FMIN));
-  return (t - 0.5) * 1400;
-}
-function centroidToY(c){ return (c/2000)*800; }
-function loudToZ(l){ return Math.min(Math.max(l*5,0.001),1.5); }
-
-function computeRMS(arr){
-  let s=0;
-  for(let i=0;i<arr.length;i++) s+=arr[i]*arr[i];
-  return Math.sqrt(s/arr.length);
-}
-
-function computeCentroid(mags, freq){
-  let num=0, den=0;
-  for(let i=0;i<mags.length;i++){
-    num += mags[i]*freq[i];
-    den += mags[i];
-  }
-  return den>0 ? num/den : 0;
-}
-
+// ================================
 function updateStatus(msg, type = 'normal'){
   const status = document.getElementById('status');
   status.textContent = msg;
@@ -198,21 +268,83 @@ function updateStatus(msg, type = 'normal'){
   console.log(`[${type}] ${msg}`);
 }
 
+function computeRMS(arr){
+  let s=0;
+  for(let i=0;i<arr.length;i++) s+=arr[i]*arr[i];
+  return Math.sqrt(s/arr.length);
+}
 
-// ============================================================================
+function computeCentroid(mags, freqs){
+  let num=0, den=0;
+  for(let i=0;i<mags.length;i++){
+    num += mags[i] * freqs[i];
+    den += mags[i];
+  }
+  return den>0 ? num/den : 0;
+}
+
+function findDominantFreq(mags, freqs){
+  let maxIdx = 0;
+  let maxVal = -Infinity;
+  for(let i=0;i<mags.length;i++){
+    if(mags[i] > maxVal){ 
+      maxVal=mags[i]; 
+      maxIdx=i; 
+    }
+  }
+  return freqs[maxIdx] || 0;
+}
+
+function analyzeAudio(){
+  if(!analyser || !running) return;
+  
+  const timeData = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(timeData);
+  const rms = computeRMS(timeData);
+  
+  if(rms < NOISE_THRESHOLD) return;
+  
+  const freqBinCount = analyser.frequencyBinCount;
+  const freqDb = new Float32Array(freqBinCount);
+  analyser.getFloatFrequencyData(freqDb);
+  
+  const mags = new Float32Array(freqBinCount);
+  const binFreqs = new Float32Array(freqBinCount);
+  const nyquist = audioCtx.sampleRate / 2;
+  
+  for(let i=0; i<freqBinCount; i++){
+    mags[i] = Math.pow(10, freqDb[i]/20);
+    binFreqs[i] = (i/freqBinCount) * nyquist;
+  }
+  
+  const dominant = findDominantFreq(mags, binFreqs);
+  const centroid = computeCentroid(mags, binFreqs);
+  
+  // Wie Python: deque mit maxlen
+  if(frequencies.length >= MAX_POINTS){
+    frequencies.shift();
+    loudness.shift();
+    centroids.shift();
+  }
+  
+  frequencies.push(dominant);
+  loudness.push(rms);
+  centroids.push(centroid);
+}
+
+// ================================
 // AUDIO START (MIC)
-// ============================================================================
+// ================================
 async function startMic() {
   if (running) {
     updateStatus("Audio läuft bereits...", "error");
     return;
   }
 
-  updateStatus("Mikrofon wird gestartet...", "normal");
+  updateStatus("🎤 Mikrofon wird gestartet...", "normal");
   console.log("🎤 Mikrofon-Zugriff wird angefordert...");
 
   try {
-    // AudioContext erstellen
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       console.log("✓ AudioContext erstellt");
@@ -220,10 +352,8 @@ async function startMic() {
 
     if (audioCtx.state === "suspended") {
       await audioCtx.resume();
-      console.log("✓ AudioContext aktiviert");
     }
 
-    // Mikrofon-Stream anfordern
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -236,44 +366,38 @@ async function startMic() {
     sourceNode = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = FFT_SIZE;
-    analyser.smoothingTimeConstant = 0.65;
-
-    freqBinCount = analyser.frequencyBinCount;
-    dataArray = new Float32Array(freqBinCount);
+    analyser.smoothingTimeConstant = 0.8;
 
     sourceNode.connect(analyser);
     running = true;
     audioSource = stream;
 
-    updateStatus("✓ Mikrofon aktiv! Sprechen oder Musik abspielen.", "success");
-    console.log("✓ Visualizer läuft");
+    updateStatus("🎙️ Aufnahme/Analyse läuft...", "success");
+    console.log("✓ Mikrofon aktiv");
 
   } catch (err) {
     console.error("❌ Mikrofon-Fehler:", err);
-    
-    let errorMsg = "Mikrofon-Fehler: ";
+    let errorMsg = "❌ Mikrofon-Fehler: ";
     if (err.name === "NotAllowedError") {
-      errorMsg += "Zugriff verweigert. Bitte erlaube Mikrofon-Zugriff in den Browser-Einstellungen.";
+      errorMsg += "Zugriff verweigert.";
     } else if (err.name === "NotFoundError") {
-      errorMsg += "Kein Mikrofon gefunden. Bitte Mikrofon anschließen.";
+      errorMsg += "Kein Mikrofon gefunden.";
     } else {
       errorMsg += err.message;
     }
-    
     updateStatus(errorMsg, "error");
   }
 }
 
-
-// ============================================================================
+// ================================
 // AUDIO: FILE
-// ============================================================================
+// ================================
 async function startFile(file){
-  console.log("📁 Datei wird geladen:", file.name);
+  console.log("🎵 WAV-Datei geladen:", file.name);
   
   if (running) stopAll();
 
-  updateStatus(`Lade ${file.name}...`, "normal");
+  updateStatus(`🎵 Lade ${file.name}...`, "normal");
 
   try {
     if (!audioCtx) {
@@ -282,17 +406,14 @@ async function startFile(file){
 
     const buf = await file.arrayBuffer();
     const decoded = await audioCtx.decodeAudioData(buf);
-    console.log(`✓ Audio dekodiert: ${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz`);
+    console.log(`✓ Audio dekodiert: ${decoded.duration.toFixed(2)}s`);
 
     const bs = audioCtx.createBufferSource();
     bs.buffer = decoded;
 
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = FFT_SIZE;
-    analyser.smoothingTimeConstant = 0.65;
-
-    freqBinCount = analyser.frequencyBinCount;
-    dataArray = new Float32Array(freqBinCount);
+    analyser.smoothingTimeConstant = 0.8;
 
     bs.connect(analyser);
     analyser.connect(audioCtx.destination);
@@ -301,62 +422,53 @@ async function startFile(file){
     running = true;
     audioSource = bs;
 
-    updateStatus(`✓ Spiele ab: ${file.name}`, "success");
+    updateStatus(`🎙️ Aufnahme/Analyse läuft... (${file.name})`, "success");
 
     bs.onended = () => {
       running = false;
-      updateStatus("Wiedergabe beendet.", "normal");
-      console.log("⏹ Wiedergabe beendet");
+      updateStatus("⏹️ Beendet", "normal");
+      console.log("⏹️ Wiedergabe beendet");
     };
 
   } catch(err) {
     console.error("❌ Datei-Fehler:", err);
-    updateStatus("Fehler beim Laden: " + err.message, "error");
+    updateStatus("❌ Fehler beim Laden: " + err.message, "error");
   }
 }
 
-
-// ============================================================================
+// ================================
 // STOP AUDIO
-// ============================================================================
+// ================================
 function stopAll(){
-  console.log("⏹ Audio wird gestoppt");
+  console.log("⏹️ Beendet durch Benutzer");
   running = false;
   
-  // Stream stoppen
   if(audioSource && audioSource.getTracks){
     audioSource.getTracks().forEach(track => track.stop());
   }
   
-  // Buffer Source stoppen
   if(audioSource && audioSource.stop){
     try{ audioSource.stop(); }catch(e){}
   }
   
-  // Disconnect
   try{ 
     if(sourceNode) sourceNode.disconnect(); 
     if(analyser) analyser.disconnect();
   }catch(e){}
   
   analyser = sourceNode = audioSource = null;
+  frequencies.length = 0;
+  loudness.length = 0;
+  centroids.length = 0;
   
-  // Arrays leeren
-  freqs.length = 0;
-  louds.length = 0;
-  cents.length = 0;
-  
-  updateStatus("Gestoppt. Bereit für neuen Input.", "normal");
+  updateStatus("🔇 Stream beendet.", "normal");
 }
 
-
-// ============================================================================
+// ================================
 // UI EVENTS
-// ============================================================================
+// ================================
 document.getElementById("btn-mic").onclick = () => {
-  startMic().catch(err => {
-    console.error("Fehler beim Starten:", err);
-  });
+  startMic().catch(err => console.error(err));
 };
 
 document.getElementById("btn-stop").onclick = stopAll;
@@ -365,137 +477,166 @@ document.getElementById("wavfile").addEventListener("change", e => {
   if (e.target.files[0]) {
     startFile(e.target.files[0]);
   }
-  e.target.value = ''; // Reset für erneutes Laden derselben Datei
+  e.target.value = '';
 });
 
+// ================================
+// KOORDINATEN ANZEIGEN (wie Python)
+// ================================
+function updateCoordinates(){
+  const coordsDiv = document.getElementById('coords');
+  if(frequencies.length === 0){
+    coordsDiv.innerHTML = '<div style="opacity:0.5">Keine Daten</div>';
+    return;
+  }
+  
+  let html = '';
+  const n = Math.min(frequencies.length, 10); // Letzte 10 Punkte
+  for(let i = frequencies.length - n; i < frequencies.length; i++){
+    const age = i / Math.max(1, frequencies.length-1);
+    const opacity = 0.3 + age * 0.7;
+    html += `<div class="coord-line" style="opacity:${opacity}">` +
+            `(${frequencies[i].toFixed(0)}, ${centroids[i].toFixed(0)}, ${loudness[i].toFixed(2)})` +
+            `</div>`;
+  }
+  coordsDiv.innerHTML = html;
+}
 
-// ============================================================================
-// ANIMATION LOOP
-// ============================================================================
-let rot = 0;
+// ================================
+// ANIMATION LOOP - EXAKT WIE PYTHON
+// ================================
+let rotation_angle = 0;
 let lastTime = performance.now();
 
 function animate(t){
   requestAnimationFrame(animate);
-
-  const dt = (t - lastTime)/1000;
+  
+  const dt = (t - lastTime) / 1000;
   lastTime = t;
-
-  // Kamera-Rotation
-  rot += 0.3 * dt * 60;
-  camera.position.x = Math.sin(rot*0.01)*800;
-  camera.position.z = Math.cos(rot*0.01)*800;
-  camera.lookAt(0,200,0);
-
+  
   // Audio-Analyse
-  if(running && analyser){
-    const timeData = new Float32Array(analyser.fftSize);
-    analyser.getFloatTimeDomainData(timeData);
-    const rms = computeRMS(timeData);
-
-    const freqDb = new Float32Array(freqBinCount);
-    analyser.getFloatFrequencyData(freqDb);
-
-    const mags = new Float32Array(freqBinCount);
-    const binFreqs = new Float32Array(freqBinCount);
-
-    const nyquist = audioCtx.sampleRate/2;
-    for(let i=0;i<freqBinCount;i++){
-      mags[i] = Math.pow(10, freqDb[i]/20);
-      binFreqs[i] = (i/freqBinCount)*nyquist;
-    }
-
-    let maxIdx = 0;
-    let maxVal = -Infinity;
-    for(let i=0;i<mags.length;i++){
-      if(mags[i] > maxVal){ maxVal=mags[i]; maxIdx=i; }
-    }
-
-    const peak = binFreqs[maxIdx] || 0;
-    const centroid = computeCentroid(mags, binFreqs);
-
-    if(rms >= NOISE_THRESHOLD){
-      if(freqs.length >= maxPoints){ 
-        freqs.shift(); 
-        louds.shift(); 
-        cents.shift(); 
+  if(running){
+    analyzeAudio();
+  }
+  
+  // Rotation wie Python (elev=20, azim rotierend)
+  rotation_angle += 0.3;
+  const rad = rotation_angle * Math.PI / 180;
+  const radius = 1500;
+  camera.position.x = Math.sin(rad) * radius;
+  camera.position.z = Math.cos(rad) * radius;
+  camera.position.y = 800;
+  camera.lookAt(0, 0, 0);
+  
+  const n = frequencies.length;
+  
+  if(n > 1){
+    // Smooth Axis Rescaling (wie Python)
+    const x = frequencies;
+    const y = centroids;
+    const z = loudness;
+    
+    const target_x_min = Math.min(...x);
+    const target_x_max = Math.max(...x);
+    const target_y_min = Math.min(...y);
+    const target_y_max = Math.max(...y);
+    const target_z_min = Math.min(...z);
+    const target_z_max = Math.max(...z);
+    
+    x_min += (target_x_min - x_min) * SMOOTH_FACTOR;
+    x_max += (target_x_max - x_max) * SMOOTH_FACTOR;
+    y_min += (target_y_min - y_min) * SMOOTH_FACTOR;
+    y_max += (target_y_max - y_max) * SMOOTH_FACTOR;
+    z_min += (target_z_min - z_min) * SMOOTH_FACTOR;
+    z_max += (target_z_max - z_max) * SMOOTH_FACTOR;
+    
+    // Skalierung auf Szene
+    const scaleX = 1000 / Math.max(x_max - x_min, 1);
+    const scaleY = 1000 / Math.max(y_max - y_min, 1);
+    const scaleZ = 500 / Math.max(z_max - z_min, 0.01);
+    
+    // AGE / FADING EFFEKT (wie Python)
+    for(let i=0; i<maxCapacity; i++){
+      const p = i*3;
+      const c = i*4;
+      
+      if(i < n){
+        const age = i / Math.max(1, n-1);
+        
+        // Position (normalisiert und skaliert)
+        positions[p]   = (x[i] - x_min) * scaleX - 500;
+        positions[p+1] = (y[i] - y_min) * scaleY - 500;
+        positions[p+2] = (z[i] - z_min) * scaleZ;
+        
+        // Farbe wie Python: age-basiertes Grün
+        colors[c]   = age * 0.2;  // R (leicht gelb)
+        colors[c+1] = age;         // G (Grün)
+        colors[c+2] = 0;           // B
+        colors[c+3] = age * 0.9;   // Alpha
+        
+        sizes[i] = 15;
+        
+      } else {
+        positions[p] = positions[p+1] = positions[p+2] = 1e6;
+        colors[c] = colors[c+1] = colors[c+2] = colors[c+3] = 0;
+        sizes[i] = 0;
       }
-      freqs.push(peak);
-      louds.push(rms);
-      cents.push(centroid);
     }
-  }
-
-  // Geometrie aktualisieren
-  const n = freqs.length;
-
-  for(let i=0;i<maxCapacity;i++){
-    const p = i*3;
-
-    if(i < n){
-      const x = freqToX(freqs[i]);
-      const y = centroidToY(cents[i]);
-      const z = loudToZ(louds[i]);
-
-      positions[p]=x; positions[p+1]=y; positions[p+2]=z;
-
-      const age = i / Math.max(1,n-1);
-      colors[p] = age*0.3;
-      colors[p+1] = 0.4 + age*0.6;
-      colors[p+2] = 0;
-
-      sizes[i] = 10 + louds[i]*20;
-
-    } else {
-      positions[p]=positions[p+1]=positions[p+2]=1e6;
-      sizes[i]=0;
-      colors[p]=colors[p+1]=colors[p+2]=0;
+    
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
+    
+    // Linien mit Age-Fading
+    let lp = 0, lc = 0;
+    for(let i=0; i<n-1; i++){
+      const A = i*3, B = (i+1)*3;
+      const age = i / Math.max(1, n-1);
+      const alpha = age * 0.7;
+      
+      linePositions[lp++] = positions[A];
+      linePositions[lp++] = positions[A+1];
+      linePositions[lp++] = positions[A+2];
+      linePositions[lp++] = positions[B];
+      linePositions[lp++] = positions[B+1];
+      linePositions[lp++] = positions[B+2];
+      
+      // Beide Endpunkte der Linie mit gleicher Farbe
+      for(let j=0; j<2; j++){
+        lineColors[lc++] = age * 0.2;
+        lineColors[lc++] = age;
+        lineColors[lc++] = 0;
+        lineColors[lc++] = alpha;
+      }
     }
+    
+    for(; lp<linePositions.length; lp++) linePositions[lp] = 1e6;
+    for(; lc<lineColors.length; lc++) lineColors[lc] = 0;
+    
+    lineGeom.attributes.position.needsUpdate = true;
+    lineGeom.attributes.color.needsUpdate = true;
+    
+    updateCoordinates();
   }
-
-  geometry.attributes.position.needsUpdate = true;
-  geometry.attributes.color.needsUpdate = true;
-  geometry.attributes.size.needsUpdate = true;
-
-  // Linien aktualisieren
-  let lp=0;
-  for(let i=0;i<n-1;i++){
-    const A=i*3, B=(i+1)*3;
-    linePositions[lp++] = positions[A];
-    linePositions[lp++] = positions[A+1];
-    linePositions[lp++] = positions[A+2];
-    linePositions[lp++] = positions[B];
-    linePositions[lp++] = positions[B+1];
-    linePositions[lp++] = positions[B+2];
-  }
-  for(;lp<linePositions.length;lp++) linePositions[lp]=1e6;
-  lineGeom.attributes.position.needsUpdate = true;
-
-  // Licht-Animation
-  pointLight.intensity = 0.5 + (n/maxPoints)*0.5;
-
+  
   renderer.render(scene, camera);
 }
 
 requestAnimationFrame(animate);
 
-
-// ============================================================================
+// ================================
 // RESIZE
-// ============================================================================
+// ================================
 window.addEventListener("resize", ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  console.log("📐 Fenster-Größe angepasst");
 });
 
-// ============================================================================
-// INIT
-// ============================================================================
 console.log("✅ TBFL_6 Visualizer bereit!");
 console.log("📊 FFT Size:", FFT_SIZE);
-console.log("📍 Max Points:", maxPoints);
+console.log("📍 Max Points:", MAX_POINTS);
+console.log("🔇 Noise Threshold:", NOISE_THRESHOLD);
 
 </script>
 
