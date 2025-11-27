@@ -5,23 +5,33 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
 <title>TBFL_6 — Web Audio Visualizer</title>
 
-<!-- Three.js CDN -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/renderers/CSS2DRenderer.js"></script>
+<!-- Three.js r128 - funktioniert garantiert -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <style>
-  html,body { height:100%; margin:0; background:#000; color:#00FF00; font-family: monospace; }
+  html,body { height:100%; margin:0; background:#000; color:#00FF00; font-family: monospace; overflow:hidden; }
   #ui {
     position: absolute; left:12px; top:12px; z-index: 10;
-    background: rgba(0,0,0,0.45); border:1px solid #004400; padding:8px; border-radius:6px;
+    background: rgba(0,0,0,0.7); border:1px solid #00ff00; padding:12px; border-radius:6px;
+    box-shadow: 0 0 20px rgba(0,255,0,0.3);
   }
-  button, label { color:#00FF00; background:transparent; border:1px solid #003300; padding:6px 8px; margin:4px; border-radius:4px; cursor:pointer; }
+  button, label { 
+    color:#00FF00; background:#001100; border:1px solid #00ff00; 
+    padding:8px 12px; margin:4px; border-radius:4px; cursor:pointer; 
+    font-family: monospace; font-size:12px;
+    transition: all 0.2s;
+  }
+  button:hover, label:hover { background:#003300; box-shadow: 0 0 10px rgba(0,255,0,0.5); }
+  button:active, label:active { transform: scale(0.95); }
   input[type=file] { display:none; }
-  #title { font-weight:bold; font-size:14px; color:#00FF00; display:block; margin-bottom:6px; }
-  #hint { font-size:11px; color:#88ff88; opacity:0.6; margin-top:6px; }
+  #title { font-weight:bold; font-size:16px; color:#00FF00; display:block; margin-bottom:8px; }
+  #status { 
+    font-size:11px; color:#88ff88; margin-top:8px; padding:6px; 
+    background:rgba(0,50,0,0.3); border-radius:4px; min-height:20px;
+  }
+  .error { color:#ff0000 !important; }
+  .success { color:#00ff00 !important; }
   canvas { display:block; }
-  .coord-label { font-size:10px; color:#00FF00; text-shadow: 0 0 4px rgba(0,255,0,0.4); }
 </style>
 </head>
 
@@ -29,23 +39,26 @@
 
 <!-- UI -->
 <div id="ui">
-  <div id="title">TBFL_6 — Web Visualizer</div>
-  <button id="btn-mic">Mikrofon (Live)</button>
-  <label for="wavfile">WAV laden</label>
-  <input id="wavfile" type="file" accept=".wav,audio/wav" />
-  <button id="btn-stop">Stop</button>
-  <div id="hint">Auf iOS/Safari muss Audio per Touch gestartet werden. HTTPS erforderlich.</div>
+  <div id="title">🎵 TBFL_6 — Audio Visualizer</div>
+  <button id="btn-mic">🎤 Mikrofon starten</button>
+  <label for="wavfile">📁 WAV laden</label>
+  <input id="wavfile" type="file" accept=".wav,.mp3,audio/*" />
+  <button id="btn-stop">⏹ Stop</button>
+  <div id="status">Bereit. Klicke auf Mikrofon oder lade eine Datei.</div>
 </div>
 
 
 <script>
+console.log("🎵 TBFL_6 Visualizer wird initialisiert...");
+
 // ============================================================================
-// iOS / SAFARI AUDIO FIX — MUSS GANZ OBEN STEHEN
+// iOS / SAFARI AUDIO FIX
 // ============================================================================
 let audioCtx = null;
 
 document.addEventListener("touchstart", () => {
   if (audioCtx && audioCtx.state === "suspended") {
+    console.log("AudioContext wird aktiviert (iOS Touch)");
     audioCtx.resume();
   }
 }, { once: true });
@@ -56,30 +69,27 @@ document.addEventListener("touchstart", () => {
 // ============================================================================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
+scene.fog = new THREE.Fog(0x000000, 500, 2000);
 
 const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 10000);
 camera.position.set(0, 300, 800);
 
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(window.devicePixelRatio || 1);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const labelRenderer = new THREE.CSS2DRenderer();
-labelRenderer.setSize(innerWidth, innerHeight);
-labelRenderer.domElement.style.position = "absolute";
-labelRenderer.domElement.style.top = "0px";
-labelRenderer.domElement.style.pointerEvents = "none";
-document.body.appendChild(labelRenderer.domElement);
-
-const controls = new THREE.OrbitControls(camera, labelRenderer.domElement);
-controls.enabled = false;
-
-const ambient = new THREE.AmbientLight(0x00ff00, 0.08);
+// Beleuchtung
+const ambient = new THREE.AmbientLight(0x00ff00, 0.1);
 scene.add(ambient);
 
-const gridHelper = new THREE.GridHelper(2000, 40, 0x003300, 0x003300);
-gridHelper.material.opacity = 0.06;
+const pointLight = new THREE.PointLight(0x00ff00, 0.5, 1500);
+pointLight.position.set(0, 400, 0);
+scene.add(pointLight);
+
+// Grid
+const gridHelper = new THREE.GridHelper(2000, 40, 0x00ff00, 0x003300);
+gridHelper.material.opacity = 0.1;
 gridHelper.material.transparent = true;
 scene.add(gridHelper);
 
@@ -92,11 +102,12 @@ let sourceNode = null;
 let dataArray = null;
 let freqBinCount = 0;
 let running = false;
+let audioSource = null; // Track für cleanup
 
 const FFT_SIZE = 2048;
-const NOISE_THRESHOLD = 0.0015;
+const NOISE_THRESHOLD = 0.002;
 
-const maxPoints = 40;
+const maxPoints = 50;
 const freqs = [];
 const louds = [];
 const cents = [];
@@ -111,9 +122,9 @@ const colors = new Float32Array(maxCapacity * 3);
 const sizes = new Float32Array(maxCapacity);
 
 const geometry = new THREE.BufferGeometry();
-geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1).setUsage(THREE.DynamicDrawUsage));
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
 
 const material = new THREE.ShaderMaterial({
   vertexColors: true,
@@ -133,7 +144,10 @@ const material = new THREE.ShaderMaterial({
   fragmentShader: `
       varying vec3 vColor;
       void main(){
-        gl_FragColor = vec4(vColor,1.0);
+        float dist = length(gl_PointCoord - vec2(0.5));
+        if(dist > 0.5) discard;
+        float alpha = 1.0 - (dist * 2.0);
+        gl_FragColor = vec4(vColor, alpha);
       }
     `
 });
@@ -141,10 +155,11 @@ const material = new THREE.ShaderMaterial({
 const points = new THREE.Points(geometry, material);
 scene.add(points);
 
+// Linien zwischen Punkten
 const linePositions = new Float32Array((maxCapacity - 1) * 2 * 3);
 const lineGeom = new THREE.BufferGeometry();
-lineGeom.setAttribute("position", new THREE.BufferAttribute(linePositions, 3).setUsage(THREE.DynamicDrawUsage));
-const lineMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.9 });
+lineGeom.setAttribute("position", new THREE.BufferAttribute(linePositions, 3));
+const lineMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.6 });
 const lines = new THREE.LineSegments(lineGeom, lineMat);
 scene.add(lines);
 
@@ -176,21 +191,39 @@ function computeCentroid(mags, freq){
   return den>0 ? num/den : 0;
 }
 
+function updateStatus(msg, type = 'normal'){
+  const status = document.getElementById('status');
+  status.textContent = msg;
+  status.className = type;
+  console.log(`[${type}] ${msg}`);
+}
+
 
 // ============================================================================
 // AUDIO START (MIC)
 // ============================================================================
 async function startMic() {
-  if (running) return;
+  if (running) {
+    updateStatus("Audio läuft bereits...", "error");
+    return;
+  }
 
-  // AudioContext muss durch Klick aktiv sein
-  if (!audioCtx)
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-  if (audioCtx.state === "suspended")
-      await audioCtx.resume();
+  updateStatus("Mikrofon wird gestartet...", "normal");
+  console.log("🎤 Mikrofon-Zugriff wird angefordert...");
 
   try {
+    // AudioContext erstellen
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      console.log("✓ AudioContext erstellt");
+    }
+
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+      console.log("✓ AudioContext aktiviert");
+    }
+
+    // Mikrofon-Stream anfordern
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -198,6 +231,7 @@ async function startMic() {
         autoGainControl: false
       }
     });
+    console.log("✓ Mikrofon-Zugriff gewährt");
 
     sourceNode = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -209,40 +243,76 @@ async function startMic() {
 
     sourceNode.connect(analyser);
     running = true;
+    audioSource = stream;
+
+    updateStatus("✓ Mikrofon aktiv! Sprechen oder Musik abspielen.", "success");
+    console.log("✓ Visualizer läuft");
 
   } catch (err) {
-    alert("Mikrofon konnte nicht gestartet werden:\n" + err.message);
+    console.error("❌ Mikrofon-Fehler:", err);
+    
+    let errorMsg = "Mikrofon-Fehler: ";
+    if (err.name === "NotAllowedError") {
+      errorMsg += "Zugriff verweigert. Bitte erlaube Mikrofon-Zugriff in den Browser-Einstellungen.";
+    } else if (err.name === "NotFoundError") {
+      errorMsg += "Kein Mikrofon gefunden. Bitte Mikrofon anschließen.";
+    } else {
+      errorMsg += err.message;
+    }
+    
+    updateStatus(errorMsg, "error");
   }
 }
 
 
 // ============================================================================
-// AUDIO: WAV FILE
+// AUDIO: FILE
 // ============================================================================
-async function startWav(file){
+async function startFile(file){
+  console.log("📁 Datei wird geladen:", file.name);
+  
   if (running) stopAll();
 
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const buf = await file.arrayBuffer();
-  const decoded = await audioCtx.decodeAudioData(buf);
+  updateStatus(`Lade ${file.name}...`, "normal");
 
-  const bs = audioCtx.createBufferSource();
-  bs.buffer = decoded;
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
 
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = FFT_SIZE;
-  analyser.smoothingTimeConstant = 0.65;
+    const buf = await file.arrayBuffer();
+    const decoded = await audioCtx.decodeAudioData(buf);
+    console.log(`✓ Audio dekodiert: ${decoded.duration.toFixed(2)}s, ${decoded.sampleRate}Hz`);
 
-  freqBinCount = analyser.frequencyBinCount;
-  dataArray = new Float32Array(freqBinCount);
+    const bs = audioCtx.createBufferSource();
+    bs.buffer = decoded;
 
-  bs.connect(analyser);
-  analyser.connect(audioCtx.destination);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = FFT_SIZE;
+    analyser.smoothingTimeConstant = 0.65;
 
-  bs.start();
-  running = true;
+    freqBinCount = analyser.frequencyBinCount;
+    dataArray = new Float32Array(freqBinCount);
 
-  bs.onended = () => running = false;
+    bs.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    bs.start();
+    running = true;
+    audioSource = bs;
+
+    updateStatus(`✓ Spiele ab: ${file.name}`, "success");
+
+    bs.onended = () => {
+      running = false;
+      updateStatus("Wiedergabe beendet.", "normal");
+      console.log("⏹ Wiedergabe beendet");
+    };
+
+  } catch(err) {
+    console.error("❌ Datei-Fehler:", err);
+    updateStatus("Fehler beim Laden: " + err.message, "error");
+  }
 }
 
 
@@ -250,21 +320,52 @@ async function startWav(file){
 // STOP AUDIO
 // ============================================================================
 function stopAll(){
+  console.log("⏹ Audio wird gestoppt");
   running = false;
-  try{ if(sourceNode && sourceNode.stop) sourceNode.stop(); }catch(e){}
-  try{ if(audioCtx) audioCtx.close(); }catch(e){}
-  analyser = sourceNode = audioCtx = null;
+  
+  // Stream stoppen
+  if(audioSource && audioSource.getTracks){
+    audioSource.getTracks().forEach(track => track.stop());
+  }
+  
+  // Buffer Source stoppen
+  if(audioSource && audioSource.stop){
+    try{ audioSource.stop(); }catch(e){}
+  }
+  
+  // Disconnect
+  try{ 
+    if(sourceNode) sourceNode.disconnect(); 
+    if(analyser) analyser.disconnect();
+  }catch(e){}
+  
+  analyser = sourceNode = audioSource = null;
+  
+  // Arrays leeren
+  freqs.length = 0;
+  louds.length = 0;
+  cents.length = 0;
+  
+  updateStatus("Gestoppt. Bereit für neuen Input.", "normal");
 }
 
 
 // ============================================================================
 // UI EVENTS
 // ============================================================================
-document.getElementById("btn-mic").onclick = startMic;
+document.getElementById("btn-mic").onclick = () => {
+  startMic().catch(err => {
+    console.error("Fehler beim Starten:", err);
+  });
+};
+
 document.getElementById("btn-stop").onclick = stopAll;
 
 document.getElementById("wavfile").addEventListener("change", e => {
-  if (e.target.files[0]) startWav(e.target.files[0]);
+  if (e.target.files[0]) {
+    startFile(e.target.files[0]);
+  }
+  e.target.value = ''; // Reset für erneutes Laden derselben Datei
 });
 
 
@@ -280,11 +381,13 @@ function animate(t){
   const dt = (t - lastTime)/1000;
   lastTime = t;
 
+  // Kamera-Rotation
   rot += 0.3 * dt * 60;
   camera.position.x = Math.sin(rot*0.01)*800;
   camera.position.z = Math.cos(rot*0.01)*800;
   camera.lookAt(0,200,0);
 
+  // Audio-Analyse
   if(running && analyser){
     const timeData = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(timeData);
@@ -312,13 +415,18 @@ function animate(t){
     const centroid = computeCentroid(mags, binFreqs);
 
     if(rms >= NOISE_THRESHOLD){
-      if(freqs.length >= maxPoints){ freqs.shift(); louds.shift(); cents.shift(); }
+      if(freqs.length >= maxPoints){ 
+        freqs.shift(); 
+        louds.shift(); 
+        cents.shift(); 
+      }
       freqs.push(peak);
       louds.push(rms);
       cents.push(centroid);
     }
   }
 
+  // Geometrie aktualisieren
   const n = freqs.length;
 
   for(let i=0;i<maxCapacity;i++){
@@ -332,15 +440,16 @@ function animate(t){
       positions[p]=x; positions[p+1]=y; positions[p+2]=z;
 
       const age = i / Math.max(1,n-1);
-      colors[p] = age*0.2;
-      colors[p+1] = age;
+      colors[p] = age*0.3;
+      colors[p+1] = 0.4 + age*0.6;
       colors[p+2] = 0;
 
-      sizes[i] = 8;
+      sizes[i] = 10 + louds[i]*20;
 
     } else {
       positions[p]=positions[p+1]=positions[p+2]=1e6;
       sizes[i]=0;
+      colors[p]=colors[p+1]=colors[p+2]=0;
     }
   }
 
@@ -348,6 +457,7 @@ function animate(t){
   geometry.attributes.color.needsUpdate = true;
   geometry.attributes.size.needsUpdate = true;
 
+  // Linien aktualisieren
   let lp=0;
   for(let i=0;i<n-1;i++){
     const A=i*3, B=(i+1)*3;
@@ -361,8 +471,10 @@ function animate(t){
   for(;lp<linePositions.length;lp++) linePositions[lp]=1e6;
   lineGeom.attributes.position.needsUpdate = true;
 
+  // Licht-Animation
+  pointLight.intensity = 0.5 + (n/maxPoints)*0.5;
+
   renderer.render(scene, camera);
-  labelRenderer.render(scene, camera);
 }
 
 requestAnimationFrame(animate);
@@ -375,10 +487,15 @@ window.addEventListener("resize", ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-  labelRenderer.setSize(innerWidth, innerHeight);
+  console.log("📐 Fenster-Größe angepasst");
 });
 
-console.log("TBFL_6 Web Visualizer ready.");
+// ============================================================================
+// INIT
+// ============================================================================
+console.log("✅ TBFL_6 Visualizer bereit!");
+console.log("📊 FFT Size:", FFT_SIZE);
+console.log("📍 Max Points:", maxPoints);
 
 </script>
 
