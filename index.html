@@ -27,6 +27,13 @@
     padding:15px; 
     border-radius:0px;
     min-width:280px;
+    transition: opacity 0.3s, transform 0.3s;
+  }
+  
+  #ui.hidden {
+    opacity: 0;
+    transform: translateX(-100%);
+    pointer-events: none;
   }
   
   #title { 
@@ -114,10 +121,57 @@
     margin: 2px 0;
     opacity: 0.8;
   }
+  
+  #toggle-ui {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background: rgba(0,0,0,0.8);
+    border: 2px solid #00FF00;
+    color: #00FF00;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    z-index: 11;
+    transition: all 0.2s;
+  }
+  
+  #toggle-ui:hover {
+    background: #003300;
+    box-shadow: 0 0 10px rgba(0,255,0,0.5);
+  }
+  
+  #mic-select-container {
+    margin-top: 8px;
+    display: none;
+  }
+  
+  #mic-select-container.visible {
+    display: block;
+  }
+  
+  select {
+    width: 100%;
+    background: #000000;
+    color: #00FF00;
+    border: 1px solid #00FF00;
+    padding: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  
+  select option {
+    background: #000000;
+    color: #00FF00;
+  }
 </style>
 </head>
 
 <body>
+
+<button id="toggle-ui">☰ MENU</button>
 
 <div id="ui">
   <div id="title">TBFL_6</div>
@@ -125,6 +179,14 @@
   <div class="section">
     <div class="label">🔊 Eingabequelle wählen:</div>
     <button id="btn-mic">🎤 [1] Mikrofon (Live)</button>
+    
+    <div id="mic-select-container">
+      <div class="label" style="margin-top:8px">🎤 Mikrofon auswählen:</div>
+      <select id="mic-select">
+        <option value="">Wird geladen...</option>
+      </select>
+    </div>
+    
     <label for="wavfile" class="file-label">🎵 [2] WAV-Datei analysieren</label>
     <input id="wavfile" type="file" accept=".wav,.mp3,audio/*" />
   </div>
@@ -144,9 +206,11 @@ console.log("🎵 TBFL_6 Visualizer wird initialisiert...");
 // ================================
 // PARAMETER (wie Python-Script)
 // ================================
-const DURATION = 0.1;
+const MEASUREMENTS_PER_SECOND = 25;
+const DURATION = 1 / MEASUREMENTS_PER_SECOND; // 0.04 Sekunden = 40ms
 const NOISE_THRESHOLD = 0.01;
-const MAX_POINTS = Math.floor(2 / DURATION);
+const FADE_DURATION = 2; // 2 Sekunden
+const MAX_POINTS = MEASUREMENTS_PER_SECOND * FADE_DURATION; // 50 Punkte
 const FFT_SIZE = 2048;
 
 let audioCtx = null;
@@ -154,10 +218,15 @@ let analyser = null;
 let sourceNode = null;
 let running = false;
 let audioSource = null;
+let selectedMicDevice = null;
 
 const frequencies = [];
 const loudness = [];
 const centroids = [];
+const timestamps = []; // Zeitstempel für Fading
+
+// Sprite für Text-Labels
+let labelSprites = [];
 
 // iOS Audio Fix
 document.addEventListener("touchstart", () => {
@@ -165,6 +234,55 @@ document.addEventListener("touchstart", () => {
     audioCtx.resume();
   }
 }, { once: true });
+
+// ================================
+// MIKROFON-LISTE LADEN
+// ================================
+async function loadMicrophones(){
+  try {
+    // Erst Berechtigung anfordern
+    await navigator.mediaDevices.getUserMedia({ audio: true });
+    
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+    
+    const select = document.getElementById('mic-select');
+    select.innerHTML = '';
+    
+    if(audioInputs.length === 0){
+      select.innerHTML = '<option>Kein Mikrofon gefunden</option>';
+      return;
+    }
+    
+    console.log("🎤 Verfügbare Mikrofone:");
+    audioInputs.forEach((device, idx) => {
+      const label = device.label || `Mikrofon ${idx + 1}`;
+      console.log(`  [${idx}] ${label}`);
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = `[${idx}] ${label}`;
+      select.appendChild(option);
+    });
+    
+    // Erstes Mikrofon vorauswählen
+    if(audioInputs.length > 0){
+      selectedMicDevice = audioInputs[0].deviceId;
+      console.log(`\n➡ Vorausgewählt: ${audioInputs[0].label || 'Standard-Mikrofon'}\n`);
+    }
+    
+  } catch(err){
+    console.error("Fehler beim Laden der Mikrofone:", err);
+    document.getElementById('mic-select').innerHTML = '<option>Fehler beim Laden</option>';
+  }
+}
+
+// Mikrofon-Auswahl ändern
+document.getElementById('mic-select').addEventListener('change', (e) => {
+  selectedMicDevice = e.target.value;
+  const select = e.target;
+  const selectedOption = select.options[select.selectedIndex];
+  console.log(`➡ Gewählt: ${selectedOption.textContent}`);
+});
 
 // ================================
 // THREE.JS SETUP - EXAKT WIE PYTHON
@@ -180,17 +298,72 @@ renderer.setPixelRatio(1);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
+// ================================
+// GRID-EBENEN (XY, YZ, ZX)
+// ================================
+function createGridPlane(color, position, rotation){
+  const size = 2000;
+  const divisions = 20;
+  const grid = new THREE.GridHelper(size, divisions, color, color);
+  grid.material.opacity = 0.08;
+  grid.material.transparent = true;
+  grid.material.depthWrite = false;
+  grid.position.copy(position);
+  if(rotation) grid.rotation.copy(rotation);
+  return grid;
+}
+
+// XY-Ebene (horizontal bei z=0)
+const gridXY = createGridPlane(0x00FF00, new THREE.Vector3(0, 0, 0), null);
+scene.add(gridXY);
+
+// YZ-Ebene (vertikal bei x=-1000)
+const gridYZ = createGridPlane(0x00FF00, new THREE.Vector3(-1000, 0, 0), new THREE.Euler(0, 0, Math.PI/2));
+scene.add(gridYZ);
+
+// ZX-Ebene (vertikal bei y=-500)
+const gridZX = createGridPlane(0x00FF00, new THREE.Vector3(0, -500, 0), new THREE.Euler(0, 0, 0));
+scene.add(gridZX);
+
+// Altes Grid entfernen
 // Grid wie Python (blasses Weiß, sehr transparent)
 const gridSize = 4000;
 const gridDivisions = 40;
 const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0xFFFFFF, 0xFFFFFF);
-gridHelper.material.opacity = 0.05;
+gridHelper.material.opacity = 0.02;
 gridHelper.material.transparent = true;
 gridHelper.material.depthWrite = false;
 scene.add(gridHelper);
 
 // Achsen unsichtbar machen
 scene.add(new THREE.AxesHelper(0));
+
+// ================================
+// TEXT SPRITE ERSTELLEN
+// ================================
+function createTextSprite(text, color = '#00FF00', fontSize = 32) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = 256;
+  canvas.height = 64;
+  
+  context.font = `${fontSize}px "Courier New", monospace`;
+  context.fillStyle = color;
+  context.textAlign = 'left';
+  context.textBaseline = 'middle';
+  context.fillText(text, 10, 32);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ 
+    map: texture, 
+    transparent: true,
+    depthTest: false
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(100, 25, 1);
+  
+  return sprite;
+}
 
 // ================================
 // GEOMETRIE - Quadratische Marker wie Python
@@ -325,11 +498,13 @@ function analyzeAudio(){
     frequencies.shift();
     loudness.shift();
     centroids.shift();
+    timestamps.shift();
   }
   
   frequencies.push(dominant);
   loudness.push(rms);
   centroids.push(centroid);
+  timestamps.push(performance.now());
 }
 
 // ================================
@@ -354,13 +529,20 @@ async function startMic() {
       await audioCtx.resume();
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
+    // Mikrofon mit ausgewähltem Device öffnen
+    const constraints = {
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false
       }
-    });
+    };
+    
+    if(selectedMicDevice){
+      constraints.audio.deviceId = { exact: selectedMicDevice };
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
     console.log("✓ Mikrofon-Zugriff gewährt");
 
     sourceNode = audioCtx.createMediaStreamSource(stream);
@@ -460,6 +642,7 @@ function stopAll(){
   frequencies.length = 0;
   loudness.length = 0;
   centroids.length = 0;
+  timestamps.length = 0;
   
   updateStatus("🔇 Stream beendet.", "normal");
 }
@@ -468,6 +651,12 @@ function stopAll(){
 // UI EVENTS
 // ================================
 document.getElementById("btn-mic").onclick = () => {
+  // Mikrofon-Auswahl anzeigen
+  const container = document.getElementById('mic-select-container');
+  if(!container.classList.contains('visible')){
+    container.classList.add('visible');
+    loadMicrophones();
+  }
   startMic().catch(err => console.error(err));
 };
 
@@ -479,6 +668,22 @@ document.getElementById("wavfile").addEventListener("change", e => {
   }
   e.target.value = '';
 });
+
+// UI Ein-/Ausblenden
+document.getElementById("toggle-ui").onclick = () => {
+  const ui = document.getElementById('ui');
+  ui.classList.toggle('hidden');
+};
+
+// Zoom mit Mausrad
+let zoomLevel = 1;
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 1.1 : 0.9;
+  zoomLevel *= delta;
+  zoomLevel = Math.max(0.3, Math.min(zoomLevel, 3));
+  camera.position.multiplyScalar(delta);
+}, { passive: false });
 
 // ================================
 // KOORDINATEN ANZEIGEN (wie Python)
@@ -507,6 +712,7 @@ function updateCoordinates(){
 // ================================
 let rotation_angle = 0;
 let lastTime = performance.now();
+let lastAnalysisTime = 0;
 
 function animate(t){
   requestAnimationFrame(animate);
@@ -514,21 +720,23 @@ function animate(t){
   const dt = (t - lastTime) / 1000;
   lastTime = t;
   
-  // Audio-Analyse
-  if(running){
+  // Audio-Analyse mit 25 Hz
+  if(running && t - lastAnalysisTime >= DURATION * 1000){
     analyzeAudio();
+    lastAnalysisTime = t;
   }
   
   // Rotation wie Python (elev=20, azim rotierend)
   rotation_angle += 0.3;
   const rad = rotation_angle * Math.PI / 180;
-  const radius = 1500;
+  const radius = 1500 * zoomLevel;
   camera.position.x = Math.sin(rad) * radius;
   camera.position.z = Math.cos(rad) * radius;
-  camera.position.y = 800;
+  camera.position.y = 800 * zoomLevel;
   camera.lookAt(0, 0, 0);
   
   const n = frequencies.length;
+  const currentTime = performance.now();
   
   if(n > 1){
     // Smooth Axis Rescaling (wie Python)
@@ -555,26 +763,49 @@ function animate(t){
     const scaleY = 1000 / Math.max(y_max - y_min, 1);
     const scaleZ = 500 / Math.max(z_max - z_min, 0.01);
     
-    // AGE / FADING EFFEKT (wie Python)
+    // Alte Labels entfernen
+    labelSprites.forEach(sprite => scene.remove(sprite));
+    labelSprites = [];
+    
+    // AGE / FADING EFFEKT (2 Sekunden)
     for(let i=0; i<maxCapacity; i++){
       const p = i*3;
       const c = i*4;
       
       if(i < n){
-        const age = i / Math.max(1, n-1);
+        const age = (currentTime - timestamps[i]) / (FADE_DURATION * 1000);
+        const fade = Math.max(0, 1 - age);
         
         // Position (normalisiert und skaliert)
-        positions[p]   = (x[i] - x_min) * scaleX - 500;
-        positions[p+1] = (y[i] - y_min) * scaleY - 500;
-        positions[p+2] = (z[i] - z_min) * scaleZ;
+        const posX = (x[i] - x_min) * scaleX - 500;
+        const posY = (y[i] - y_min) * scaleY - 500;
+        const posZ = (z[i] - z_min) * scaleZ;
         
-        // Farbe wie Python: age-basiertes Grün
-        colors[c]   = age * 0.2;  // R (leicht gelb)
-        colors[c+1] = age;         // G (Grün)
-        colors[c+2] = 0;           // B
-        colors[c+3] = age * 0.9;   // Alpha
+        positions[p]   = posX;
+        positions[p+1] = posY;
+        positions[p+2] = posZ;
+        
+        // Farbe mit 2-Sekunden-Fade
+        const greenIntensity = 0.3 + fade * 0.7;
+        colors[c]   = greenIntensity * 0.2;  // R (leicht gelb)
+        colors[c+1] = greenIntensity;         // G (Grün)
+        colors[c+2] = 0;                      // B
+        colors[c+3] = fade * 0.9;             // Alpha
         
         sizes[i] = 15;
+        
+        // Text-Label für jeden Punkt
+        if(fade > 0.1){
+          const label = createTextSprite(
+            `(${x[i].toFixed(0)},${y[i].toFixed(0)},${z[i].toFixed(2)})`,
+            `rgba(0, 255, 0, ${fade})`,
+            24
+          );
+          label.position.set(posX + 50, posY + 20, posZ);
+          label.material.opacity = fade * 0.8;
+          scene.add(label);
+          labelSprites.push(label);
+        }
         
       } else {
         positions[p] = positions[p+1] = positions[p+2] = 1e6;
@@ -587,12 +818,13 @@ function animate(t){
     geometry.attributes.color.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
     
-    // Linien mit Age-Fading
+    // Linien mit 2-Sekunden-Fade
     let lp = 0, lc = 0;
     for(let i=0; i<n-1; i++){
       const A = i*3, B = (i+1)*3;
-      const age = i / Math.max(1, n-1);
-      const alpha = age * 0.7;
+      const age = (currentTime - timestamps[i]) / (FADE_DURATION * 1000);
+      const fade = Math.max(0, 1 - age);
+      const alpha = fade * 0.7;
       
       linePositions[lp++] = positions[A];
       linePositions[lp++] = positions[A+1];
@@ -601,10 +833,11 @@ function animate(t){
       linePositions[lp++] = positions[B+1];
       linePositions[lp++] = positions[B+2];
       
+      const greenIntensity = 0.3 + fade * 0.7;
       // Beide Endpunkte der Linie mit gleicher Farbe
       for(let j=0; j<2; j++){
-        lineColors[lc++] = age * 0.2;
-        lineColors[lc++] = age;
+        lineColors[lc++] = greenIntensity * 0.2;
+        lineColors[lc++] = greenIntensity;
         lineColors[lc++] = 0;
         lineColors[lc++] = alpha;
       }
